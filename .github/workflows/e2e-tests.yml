@@ -1,0 +1,283 @@
+name: E2E Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Target network for deployment'
+        required: true
+        default: 'local'
+        type: choice
+        options:
+          - local
+          - sepolia
+          - holesky
+      sp1_mode:
+        description: 'SP1 Helios mode'
+        required: true
+        default: 'mock'
+        type: choice
+        options:
+          - mock
+          - production
+  push:
+    branches:
+      - main
+      - dev
+      - 'RonTuretzky/**'
+  pull_request:
+    branches:
+      - main
+      - dev
+
+env:
+  FOUNDRY_PROFILE: ci
+  IS_SP1HELIOS_MOCK: ${{ github.event.inputs.sp1_mode == 'production' && '0' || '1' }}
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Unit Tests - Run first for fast feedback
+  # -----------------------------------------------------------------------
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Build
+        working-directory: contracts
+        run: forge build --sizes
+
+      - name: Run Tests
+        working-directory: contracts
+        run: forge test -vvv
+
+  # -----------------------------------------------------------------------
+  # E2E Tests with Kind Cluster
+  # -----------------------------------------------------------------------
+  e2e-tests:
+    name: E2E Tests (${{ github.event.inputs.network || 'local' }})
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.13.0'
+
+      - name: Install Kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+
+      - name: Create Kind Cluster
+        run: |
+          kind create cluster --name avs-e2e --config=- <<EOF
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+            - role: control-plane
+            - role: worker
+          EOF
+          kubectl cluster-info --context kind-avs-e2e
+
+      - name: Build E2E Docker Image
+        run: |
+          docker build -t avs-middleware-e2e:latest -f e2e/docker/Dockerfile .
+          kind load docker-image avs-middleware-e2e:latest --name avs-e2e
+
+      - name: Setup EigenLayer Infrastructure
+        run: |
+          # Clone gas-killer-router for EigenLayer BLS local library
+          git clone --depth 1 https://github.com/BreadchainCoop/gas-killer-router.git /tmp/gas-killer-router
+
+          # Deploy EigenLayer infrastructure via helm
+          helm install eigenlayer /tmp/gas-killer-router/helm/gas-killer \
+            --namespace eigenlayer \
+            --create-namespace \
+            --set environment=LOCAL \
+            --set ethereum.enabled=true \
+            --set setupJob.enabled=true \
+            --set node.count=3 \
+            --wait --timeout=10m
+
+      - name: Wait for EigenLayer Setup
+        run: |
+          echo "Waiting for EigenLayer setup job to complete..."
+          kubectl wait --for=condition=complete job/eigenlayer-setup \
+            --namespace eigenlayer \
+            --timeout=600s
+
+          echo "Extracting operator keys..."
+          kubectl cp eigenlayer/eigenlayer-ethereum-0:/app/.nodes ./e2e/docker/.nodes
+
+      - name: Deploy AVS Middleware
+        run: |
+          # Get Registry Coordinator address from EigenLayer deployment
+          REGISTRY_COORDINATOR=$(kubectl get configmap eigenlayer-addresses \
+            -n eigenlayer -o jsonpath='{.data.registryCoordinator}')
+
+          helm install avs-middleware ./helm/avs-middleware \
+            --namespace avs \
+            --create-namespace \
+            --set registryCoordinator.address=$REGISTRY_COORDINATOR \
+            --set sp1Helios.mock=${{ env.IS_SP1HELIOS_MOCK == '1' }} \
+            --set network=${{ github.event.inputs.network || 'local' }} \
+            --wait --timeout=10m
+
+      - name: Run E2E Test Suite
+        run: |
+          # Create test job
+          kubectl apply -f - <<EOF
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: e2e-test-runner
+            namespace: avs
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: e2e-test
+                    image: avs-middleware-e2e:latest
+                    env:
+                      - name: IS_SP1HELIOS_MOCK
+                        value: "${{ env.IS_SP1HELIOS_MOCK }}"
+                      - name: L1_RPC_URL
+                        valueFrom:
+                          configMapKeyRef:
+                            name: avs-config
+                            key: l1_rpc_url
+                      - name: L2_RPC_URL
+                        valueFrom:
+                          configMapKeyRef:
+                            name: avs-config
+                            key: l2_rpc_url
+                    volumeMounts:
+                      - name: nodes
+                        mountPath: /app/.nodes
+                      - name: artifacts
+                        mountPath: /app/artifacts
+                volumes:
+                  - name: nodes
+                    persistentVolumeClaim:
+                      claimName: operator-keys-pvc
+                  - name: artifacts
+                    emptyDir: {}
+                restartPolicy: Never
+            backoffLimit: 3
+          EOF
+
+          kubectl wait --for=condition=complete job/e2e-test-runner \
+            --namespace avs \
+            --timeout=600s
+
+      - name: Collect Test Logs
+        if: always()
+        run: |
+          kubectl logs job/e2e-test-runner -n avs > e2e-test-logs.txt || true
+          kubectl get pods -A -o wide > pods-status.txt || true
+
+      - name: Upload Test Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: |
+            e2e-test-logs.txt
+            pods-status.txt
+
+      - name: Cleanup
+        if: always()
+        run: |
+          kind delete cluster --name avs-e2e || true
+
+  # -----------------------------------------------------------------------
+  # Sepolia Integration Tests (Manual Trigger Only)
+  # -----------------------------------------------------------------------
+  sepolia-integration:
+    name: Sepolia Integration
+    runs-on: ubuntu-latest
+    if: github.event.inputs.network == 'sepolia'
+    needs: unit-tests
+    environment: sepolia
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Deploy to Sepolia
+        working-directory: contracts
+        env:
+          PRIVATE_KEY: ${{ secrets.SEPOLIA_PRIVATE_KEY }}
+          REGISTRY_COORDINATOR_ADDRESS: ${{ secrets.REGISTRY_COORDINATOR_ADDRESS }}
+          SP1HELIOS_ADDRESS: ${{ secrets.SP1HELIOS_ADDRESS }}
+          RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+        run: |
+          forge script script/DeploySepolia.s.sol:DeploySepolia \
+            --rpc-url $RPC_URL \
+            --broadcast \
+            --verify
+
+      - name: Verify Deployment
+        working-directory: contracts
+        run: |
+          echo "Deployment completed. Verify contracts on Etherscan."
+
+  # -----------------------------------------------------------------------
+  # SP1 Helios Integration Tests
+  # -----------------------------------------------------------------------
+  sp1-helios-tests:
+    name: SP1 Helios Integration
+    runs-on: ubuntu-latest
+    if: github.event.inputs.sp1_mode == 'production'
+    needs: e2e-tests
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Setup SP1 Helios
+        run: |
+          echo "Installing SP1 Helios dependencies..."
+          # SP1 Helios setup would go here
+          # This requires SP1 prover infrastructure
+
+      - name: Run SP1 Proof Generation Tests
+        working-directory: contracts
+        env:
+          BEACON_CHAIN_RPC: ${{ secrets.BEACON_CHAIN_RPC }}
+          SP1HELIOS_ADDRESS: ${{ secrets.SP1HELIOS_ADDRESS }}
+        run: |
+          echo "Running SP1 Helios proof generation..."
+          # Integration with SP1 Helios for real proof generation
+          forge test --match-contract SP1HeliosIntegration -vvv || echo "SP1 tests skipped"

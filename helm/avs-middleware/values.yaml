@@ -1,0 +1,119 @@
+# AVS Middleware Helm Chart Values
+# Default configuration for local development
+
+# Environment: local, sepolia, holesky, mainnet
+environment: local
+
+# Network configuration
+network:
+  l1:
+    name: ethereum
+    rpcUrl: "http://ethereum:8545"
+    chainId: 31337
+  l2:
+    name: gnosis
+    rpcUrl: "http://gnosis:8545"
+    chainId: 100
+
+# EigenLayer configuration
+eigenlayer:
+  # Pre-deployed addresses (required for testnet/mainnet)
+  delegationManager: ""
+  strategyManager: ""
+  avsDirectory: ""
+
+  # Registry Coordinator (deployed by gas-killer-router)
+  registryCoordinator:
+    address: ""
+
+# SP1 Helios configuration
+sp1Helios:
+  # Use mock for local testing
+  mock: true
+  # Address of deployed SP1Helios (leave empty to deploy mock)
+  address: ""
+  # Beacon chain RPC for real proofs
+  beaconChainRpc: ""
+
+# Middleware contracts
+middleware:
+  image:
+    repository: avs-middleware-e2e
+    tag: latest
+    pullPolicy: IfNotPresent
+
+# Operator configuration
+operators:
+  count: 3
+  minimumStake: "1"
+  maxOperatorCount: 32
+
+  # Socket addresses for operators
+  sockets:
+    - "127.0.0.1:3000"
+    - "127.0.0.1:3001"
+    - "127.0.0.1:3002"
+
+# Cerberus signer
+signer:
+  enabled: true
+  image:
+    repository: ghcr.io/layr-labs/cerberus
+    tag: "0.0.2"
+  ports:
+    grpc: 50051
+    metrics: 9081
+
+# E2E test runner
+e2eTest:
+  enabled: true
+  image:
+    repository: avs-middleware-e2e
+    tag: latest
+
+# Persistence
+persistence:
+  enabled: true
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 1Gi
+
+# Resources
+resources:
+  middleware:
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+  signer:
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+
+# Init container timeouts (seconds)
+initContainers:
+  timeout: 300
+
+# Service account
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Pod annotations
+podAnnotations: {}
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}

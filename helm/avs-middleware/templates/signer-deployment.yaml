@@ -1,0 +1,113 @@
+{{- if .Values.signer.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "avs-middleware.fullname" . }}-signer
+  labels:
+    {{- include "avs-middleware.labels" . | nindent 4 }}
+    app.kubernetes.io/component: signer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "avs-middleware.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: signer
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "avs-middleware.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: signer
+    spec:
+      serviceAccountName: {{ include "avs-middleware.serviceAccountName" . }}
+      initContainers:
+        - name: wait-for-setup
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for operator keys..."
+              timeout={{ .Values.initContainers.timeout }}
+              elapsed=0
+              while [ ! -f /app/.nodes/.setup_complete ]; do
+                if [ $elapsed -ge $timeout ]; then
+                  echo "Timeout waiting for setup"
+                  exit 1
+                fi
+                echo "Waiting for setup completion... ($elapsed/$timeout)"
+                sleep 5
+                elapsed=$((elapsed + 5))
+              done
+              echo "Setup complete, starting signer"
+          volumeMounts:
+            - name: nodes
+              mountPath: /app/.nodes
+      containers:
+        - name: cerberus
+          image: "{{ .Values.signer.image.repository }}:{{ .Values.signer.image.tag }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.signer.ports.grpc }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.signer.ports.metrics }}
+              protocol: TCP
+          env:
+            - name: METRICS_PORT
+              value: {{ .Values.signer.ports.metrics | quote }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "avs-middleware.fullname" . }}-config
+          resources:
+            {{- toYaml .Values.resources.signer | nindent 12 }}
+          volumeMounts:
+            - name: nodes
+              mountPath: /app/.nodes
+      volumes:
+        - name: nodes
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "avs-middleware.fullname" . }}-nodes
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "avs-middleware.fullname" . }}-signer
+  labels:
+    {{- include "avs-middleware.labels" . | nindent 4 }}
+    app.kubernetes.io/component: signer
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.signer.ports.grpc }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+    - port: {{ .Values.signer.ports.metrics }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "avs-middleware.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: signer
+{{- end }}

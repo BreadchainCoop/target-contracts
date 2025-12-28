@@ -1,0 +1,22 @@
+apiVersion: v2
+name: avs-middleware
+description: EigenLayer AVS Middleware for cross-chain BLS signature verification
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+
+keywords:
+  - eigenlayer
+  - avs
+  - bls
+  - middleware
+  - sp1-helios
+
+maintainers:
+  - name: BreadchainCoop
+    url: https://github.com/BreadchainCoop
+
+dependencies: []
+
+annotations:
+  category: Blockchain Infrastructure

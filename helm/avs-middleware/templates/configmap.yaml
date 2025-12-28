@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "avs-middleware.fullname" . }}-config
+  labels:
+    {{- include "avs-middleware.labels" . | nindent 4 }}
+data:
+  environment: {{ .Values.environment | quote }}
+  l1_rpc_url: {{ include "avs-middleware.l1RpcUrl" . | quote }}
+  l2_rpc_url: {{ include "avs-middleware.l2RpcUrl" . | quote }}
+  l1_chain_id: {{ .Values.network.l1.chainId | quote }}
+  l2_chain_id: {{ .Values.network.l2.chainId | quote }}
+  is_sp1helios_mock: {{ .Values.sp1Helios.mock | quote }}
+  {{- if .Values.sp1Helios.address }}
+  sp1helios_address: {{ .Values.sp1Helios.address | quote }}
+  {{- end }}
+  {{- if .Values.sp1Helios.beaconChainRpc }}
+  beacon_chain_rpc: {{ .Values.sp1Helios.beaconChainRpc | quote }}
+  {{- end }}
+  {{- if .Values.eigenlayer.registryCoordinator.address }}
+  registry_coordinator_address: {{ .Values.eigenlayer.registryCoordinator.address | quote }}
+  {{- end }}
+  operator_count: {{ .Values.operators.count | quote }}
+  minimum_stake: {{ .Values.operators.minimumStake | quote }}
+  max_operator_count: {{ .Values.operators.maxOperatorCount | quote }}
+  cerberus_grpc_port: {{ .Values.signer.ports.grpc | quote }}
+  cerberus_metrics_port: {{ .Values.signer.ports.metrics | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "avs-middleware.fullname" . }}-operator-config
+  labels:
+    {{- include "avs-middleware.labels" . | nindent 4 }}
+data:
+  config.json: |
+    {
+      "quorum": {
+        "minimumStake": "{{ .Values.operators.minimumStake }}",
+        "maxOperatorCount": {{ .Values.operators.maxOperatorCount }},
+        "kickBIPsOfOperatorStake": 10000,
+        "kickBIPsOfTotalStake": 100
+      },
+      "operators": {
+        {{- $length := len .Values.operators.sockets }}
+        {{- range $i, $socket := .Values.operators.sockets }}
+        "testacc{{ add $i 1 }}": {
+          "socketAddress": "{{ $socket }}"
+        }{{- if lt (add $i 1) $length }},{{- end }}
+        {{- end }}
+      }
+    }

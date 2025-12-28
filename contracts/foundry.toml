@@ -20,3 +20,5 @@ fs_permissions = [
 
 [rpc_endpoints]
 holesky = "https://1rpc.io/holesky"
+sepolia = "https://1rpc.io/sepolia"
+gnosis = "https://rpc.gnosischain.com"

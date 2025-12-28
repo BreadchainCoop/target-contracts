@@ -1,0 +1,81 @@
+{{- if not .Values.sp1Helios.mock }}
+# SP1 Helios Light Client Deployment
+# Only deployed when sp1Helios.mock is false
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "avs-middleware.fullname" . }}-sp1helios
+  labels:
+    {{- include "avs-middleware.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sp1helios
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "avs-middleware.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: sp1helios
+  template:
+    metadata:
+      labels:
+        {{- include "avs-middleware.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: sp1helios
+    spec:
+      serviceAccountName: {{ include "avs-middleware.serviceAccountName" . }}
+      containers:
+        - name: sp1helios
+          image: "ghcr.io/succinctlabs/sp1-helios:latest"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: rpc
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: BEACON_RPC_URL
+              value: {{ .Values.sp1Helios.beaconChainRpc | quote }}
+            - name: L1_RPC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "avs-middleware.fullname" . }}-config
+                  key: l1_rpc_url
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: rpc
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: rpc
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "avs-middleware.fullname" . }}-sp1helios
+  labels:
+    {{- include "avs-middleware.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sp1helios
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: rpc
+      protocol: TCP
+      name: rpc
+  selector:
+    {{- include "avs-middleware.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: sp1helios
+{{- end }}

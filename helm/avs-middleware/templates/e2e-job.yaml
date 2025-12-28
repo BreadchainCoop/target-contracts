@@ -1,0 +1,165 @@
+{{- if .Values.e2eTest.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "avs-middleware.fullname" . }}-e2e-test
+  labels:
+    {{- include "avs-middleware.labels" . | nindent 4 }}
+    app.kubernetes.io/component: e2e-test
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "avs-middleware.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: e2e-test
+    spec:
+      serviceAccountName: {{ include "avs-middleware.serviceAccountName" . }}
+      restartPolicy: Never
+      initContainers:
+        - name: wait-for-signer
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for signer service..."
+              timeout={{ .Values.initContainers.timeout }}
+              elapsed=0
+              while ! nc -z {{ include "avs-middleware.fullname" . }}-signer {{ .Values.signer.ports.grpc }}; do
+                if [ $elapsed -ge $timeout ]; then
+                  echo "Timeout waiting for signer"
+                  exit 1
+                fi
+                echo "Waiting for signer... ($elapsed/$timeout)"
+                sleep 5
+                elapsed=$((elapsed + 5))
+              done
+              echo "Signer is ready"
+      containers:
+        - name: e2e-runner
+          image: "{{ .Values.e2eTest.image.repository }}:{{ .Values.e2eTest.image.tag }}"
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "Starting E2E test suite..."
+
+              # Source configuration
+              source /app/scripts/config.sh
+
+              # Run the full E2E flow
+              echo "Step 1: Deploying bridge contracts..."
+              /app/scripts/deploy-bridge.sh
+
+              echo "Step 2: Updating middleware shim..."
+              /app/scripts/update-shim.sh
+
+              echo "Step 3: Generating proof..."
+              if [ "$IS_SP1HELIOS_MOCK" = "1" ] || [ "$IS_SP1HELIOS_MOCK" = "true" ]; then
+                echo "Using mock proof generation..."
+                /app/scripts/generate-mock-proof.sh 1234
+              else
+                echo "Using real SP1Helios proof..."
+                SLOT_NUMBER=$(/app/scripts/get-sp1-slot.sh | tail -n1)
+                /app/scripts/generate-proof.sh $SLOT_NUMBER
+              fi
+
+              echo "Step 4: Updating mimic with proof..."
+              /app/scripts/update-mimic.sh
+
+              echo "Step 5: Running signature verification..."
+              /app/scripts/run-check-signatures.sh
+
+              echo "E2E test suite completed successfully!"
+          env:
+            - name: IS_SP1HELIOS_MOCK
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "avs-middleware.fullname" . }}-config
+                  key: is_sp1helios_mock
+            - name: L1_RPC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "avs-middleware.fullname" . }}-config
+                  key: l1_rpc_url
+            - name: L2_RPC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "avs-middleware.fullname" . }}-config
+                  key: l2_rpc_url
+            - name: SIGNER_ENDPOINT
+              value: "http://{{ include "avs-middleware.fullname" . }}-signer:{{ .Values.signer.ports.grpc }}"
+            - name: CERBERUS_GRPC_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "avs-middleware.fullname" . }}-config
+                  key: cerberus_grpc_port
+            {{- if .Values.eigenlayer.registryCoordinator.address }}
+            - name: REGISTRY_COORDINATOR_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "avs-middleware.fullname" . }}-config
+                  key: registry_coordinator_address
+            {{- end }}
+            {{- if .Values.sp1Helios.address }}
+            - name: SP1HELIOS_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "avs-middleware.fullname" . }}-config
+                  key: sp1helios_address
+            {{- end }}
+            {{- if .Values.sp1Helios.beaconChainRpc }}
+            - name: BEACON_CHAIN_RPC
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "avs-middleware.fullname" . }}-config
+                  key: beacon_chain_rpc
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ include "avs-middleware.fullname" . }}-secrets
+                optional: true
+          resources:
+            {{- toYaml .Values.resources.middleware | nindent 12 }}
+          volumeMounts:
+            - name: nodes
+              mountPath: /app/.nodes
+            - name: artifacts
+              mountPath: /app/artifacts
+            - name: operator-config
+              mountPath: /app/config
+      volumes:
+        - name: nodes
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "avs-middleware.fullname" . }}-nodes
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: artifacts
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "avs-middleware.fullname" . }}-artifacts
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: operator-config
+          configMap:
+            name: {{ include "avs-middleware.fullname" . }}-operator-config
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

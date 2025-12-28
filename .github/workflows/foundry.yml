@@ -1,0 +1,105 @@
+name: Foundry
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - dev
+      - 'RonTuretzky/**'
+  pull_request:
+
+env:
+  FOUNDRY_PROFILE: ci
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Build and Test
+  # -----------------------------------------------------------------------
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Check formatting
+        run: forge fmt --check
+
+      - name: Build
+        run: forge build --sizes
+
+      - name: Run tests
+        run: forge test -vvv
+
+  # -----------------------------------------------------------------------
+  # Coverage
+  # -----------------------------------------------------------------------
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Install LCOV
+        run: sudo apt-get install -y lcov
+
+      - name: Build
+        run: forge build
+
+      - name: Generate coverage
+        run: |
+          FOUNDRY_DENY_WARNINGS=false forge coverage \
+            --report lcov \
+            --report summary \
+            --no-match-coverage "script|test"
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: contracts/lcov.info
+
+  # -----------------------------------------------------------------------
+  # Lint Solidity
+  # -----------------------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Format check
+        run: forge fmt --check
+
+      - name: Build check
+        run: forge build --sizes
