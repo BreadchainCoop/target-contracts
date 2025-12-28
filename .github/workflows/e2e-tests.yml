@@ -211,10 +211,10 @@ jobs:
           kind delete cluster --name avs-e2e || true
 
   # -----------------------------------------------------------------------
-  # Sepolia Integration Tests (Manual Trigger Only)
+  # Sepolia + Gnosis Integration Tests (Manual Trigger Only)
   # -----------------------------------------------------------------------
-  sepolia-integration:
-    name: Sepolia Integration
+  sepolia-gnosis-integration:
+    name: Sepolia + Gnosis Integration
     runs-on: ubuntu-latest
     if: github.event.inputs.network == 'sepolia'
     needs: unit-tests
@@ -229,22 +229,45 @@ jobs:
         with:
           version: stable
 
-      - name: Deploy to Sepolia
+      - name: Deploy L1 Contracts to Sepolia
         working-directory: contracts
         env:
           PRIVATE_KEY: ${{ secrets.SEPOLIA_PRIVATE_KEY }}
           REGISTRY_COORDINATOR_ADDRESS: ${{ secrets.REGISTRY_COORDINATOR_ADDRESS }}
-          SP1HELIOS_ADDRESS: ${{ secrets.SP1HELIOS_ADDRESS }}
-          RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
         run: |
-          forge script script/DeploySepolia.s.sol:DeploySepolia \
-            --rpc-url $RPC_URL \
+          forge script script/DeployL1Sepolia.s.sol:DeployL1Sepolia \
+            --rpc-url https://1rpc.io/sepolia \
             --broadcast
+          echo "L1 deployment complete"
 
-      - name: Verify Deployment
+      - name: Extract L1 Addresses
+        id: l1
         working-directory: contracts
         run: |
-          echo "Deployment completed. Verify contracts on Etherscan."
+          MIDDLEWARE_SHIM=$(jq -r '.middlewareShim' artifacts/l1-sepolia-deploy.json)
+          echo "middleware_shim=$MIDDLEWARE_SHIM" >> $GITHUB_OUTPUT
+          echo "MiddlewareShim: $MIDDLEWARE_SHIM"
+
+      - name: Deploy L2 Contracts to Gnosis
+        working-directory: contracts
+        env:
+          PRIVATE_KEY: ${{ secrets.GNOSIS_PRIVATE_KEY }}
+          MIDDLEWARE_SHIM_ADDRESS: ${{ steps.l1.outputs.middleware_shim }}
+          SP1HELIOS_ADDRESS: ${{ secrets.SP1HELIOS_ADDRESS }}
+          IS_SP1HELIOS_MOCK: ${{ env.IS_SP1HELIOS_MOCK }}
+        run: |
+          forge script script/DeployL2Gnosis.s.sol:DeployL2Gnosis \
+            --rpc-url https://rpc.gnosischain.com \
+            --broadcast
+          echo "L2 deployment complete"
+
+      - name: Upload Deployment Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-artifacts
+          path: |
+            contracts/artifacts/l1-sepolia-deploy.json
+            contracts/artifacts/l2-gnosis-deploy.json
 
   # -----------------------------------------------------------------------
   # SP1 Helios Integration Tests
