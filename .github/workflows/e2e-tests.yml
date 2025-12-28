@@ -234,9 +234,10 @@ jobs:
         env:
           PRIVATE_KEY: ${{ secrets.SEPOLIA_PRIVATE_KEY }}
           REGISTRY_COORDINATOR_ADDRESS: ${{ secrets.REGISTRY_COORDINATOR_ADDRESS }}
+          RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
         run: |
           forge script script/DeployL1Sepolia.s.sol:DeployL1Sepolia \
-            --rpc-url https://1rpc.io/sepolia \
+            --rpc-url $RPC_URL \
             --broadcast
           echo "L1 deployment complete"
 
@@ -255,9 +256,10 @@ jobs:
           MIDDLEWARE_SHIM_ADDRESS: ${{ steps.l1.outputs.middleware_shim }}
           SP1HELIOS_ADDRESS: ${{ secrets.SP1HELIOS_ADDRESS }}
           IS_SP1HELIOS_MOCK: ${{ env.IS_SP1HELIOS_MOCK }}
+          RPC_URL: ${{ secrets.GNOSIS_RPC_URL }}
         run: |
           forge script script/DeployL2Gnosis.s.sol:DeployL2Gnosis \
-            --rpc-url https://rpc.gnosischain.com \
+            --rpc-url $RPC_URL \
             --broadcast
           echo "L2 deployment complete"
 
