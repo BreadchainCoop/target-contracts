@@ -236,12 +236,10 @@ jobs:
           REGISTRY_COORDINATOR_ADDRESS: ${{ secrets.REGISTRY_COORDINATOR_ADDRESS }}
           SP1HELIOS_ADDRESS: ${{ secrets.SP1HELIOS_ADDRESS }}
           RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
-          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
         run: |
           forge script script/DeploySepolia.s.sol:DeploySepolia \
             --rpc-url $RPC_URL \
-            --broadcast \
-            --verify
+            --broadcast
 
       - name: Verify Deployment
         working-directory: contracts

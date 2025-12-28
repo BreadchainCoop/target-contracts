@@ -45,8 +45,7 @@ cp .env.example .env
 source .env
 forge script script/DeployEnvironment.s.sol:DeployEnvironment \
   --rpc-url holesky \
-  --broadcast \
-  --verify
+  --broadcast
 ```
 
 ### Sepolia Deployment
@@ -62,9 +61,10 @@ cp .env.sepolia.example .env.sepolia
 source .env.sepolia
 forge script script/DeploySepolia.s.sol:DeploySepolia \
   --rpc-url sepolia \
-  --broadcast \
-  --verify
+  --broadcast
 ```
+
+> **Optional:** Add `--verify --etherscan-api-key $ETHERSCAN_API_KEY` to verify contracts on Etherscan.
 
 **Note:** You must have a Registry Coordinator deployed on Sepolia before running this script. Set `REGISTRY_COORDINATOR_ADDRESS` in your environment.
 
