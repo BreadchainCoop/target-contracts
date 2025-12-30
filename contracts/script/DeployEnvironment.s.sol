@@ -17,7 +17,7 @@ contract DeployEnvironment is Script {
         vm.startBroadcast(deployerPrivateKey);
 
         MiddlewareShim middlewareShim =
-            new MiddlewareShim(ISlashingRegistryCoordinator(OPACITY_REGISTRY_COORDINATOR_ADDRESS_SEPOLIA));
+            new MiddlewareShim(ISlashingRegistryCoordinator(registryCoordinator));
         console.log("MiddlewareShim deployed at:", address(middlewareShim));
 
         RegistryCoordinatorMimic registryCoordinatorMimic =
