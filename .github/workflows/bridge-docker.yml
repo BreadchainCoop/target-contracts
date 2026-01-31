@@ -64,9 +64,5 @@ jobs:
         run: |
           docker build -t bridge-test -f scripts/Dockerfile .
           # Test that the image has the required tools
-          docker run --rm bridge-test which forge
-          docker run --rm bridge-test which cast
-          docker run --rm bridge-test which jq
-          # Test that contracts are built
-          docker run --rm --entrypoint /bin/bash bridge-test -c "cd /app/contracts && forge build --sizes" || true
+          docker run --rm --entrypoint /bin/bash bridge-test -c "which forge && which cast && which jq"
           echo "Docker image built and tested successfully!"
