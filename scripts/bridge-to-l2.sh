@@ -3,19 +3,20 @@
 #######################################################################
 # Bridge EigenLayer Operator State from L1 to L2
 #
-# This script bridges operator state from an L1 MiddlewareShim to an
-# L2 RegistryCoordinatorMimic using existing deployed contracts.
+# This script deploys the bridge contracts and bridges operator state
+# from an L1 registry coordinator to an L2 mimic contract.
 #
 # Required Environment Variables:
-#   PRIVATE_KEY                      - Private key for transactions
-#   L1_RPC_URL                       - RPC URL for L1 (e.g., Sepolia)
-#   L2_RPC_URL                       - RPC URL for L2 (e.g., Gnosis)
-#   MIDDLEWARE_SHIM_ADDRESS          - L1 MiddlewareShim contract address
-#   REGISTRY_COORDINATOR_MIMIC_ADDRESS - L2 RegistryCoordinatorMimic address
-#   BLS_SIGNATURE_CHECKER_ADDRESS    - L2 BLSSignatureChecker address
+#   PRIVATE_KEY              - Private key for deployment and transactions
+#   L1_RPC_URL               - RPC URL for L1 (e.g., Sepolia)
+#   L2_RPC_URL               - RPC URL for L2 (e.g., Gnosis)
+#   REGISTRY_COORDINATOR_ADDRESS - L1 registry coordinator to bridge from
 #
 # Optional Environment Variables:
-#   SLOT_NUMBER                      - Slot number for mock proof (default: 12345)
+#   SLOT_NUMBER              - Slot number for mock proof (default: 12345)
+#   SKIP_DEPLOY              - Set to "true" to skip deployment and use existing contracts
+#   L1_DEPLOY_FILE           - Path to existing L1 deployment file (required if SKIP_DEPLOY=true)
+#   L2_DEPLOY_FILE           - Path to existing L2 deployment file (required if SKIP_DEPLOY=true)
 #
 #######################################################################
 
@@ -46,9 +47,7 @@ validate_env() {
     [[ -z "$PRIVATE_KEY" ]] && missing+=("PRIVATE_KEY")
     [[ -z "$L1_RPC_URL" ]] && missing+=("L1_RPC_URL")
     [[ -z "$L2_RPC_URL" ]] && missing+=("L2_RPC_URL")
-    [[ -z "$MIDDLEWARE_SHIM_ADDRESS" ]] && missing+=("MIDDLEWARE_SHIM_ADDRESS")
-    [[ -z "$REGISTRY_COORDINATOR_MIMIC_ADDRESS" ]] && missing+=("REGISTRY_COORDINATOR_MIMIC_ADDRESS")
-    [[ -z "$BLS_SIGNATURE_CHECKER_ADDRESS" ]] && missing+=("BLS_SIGNATURE_CHECKER_ADDRESS")
+    [[ -z "$REGISTRY_COORDINATOR_ADDRESS" ]] && missing+=("REGISTRY_COORDINATOR_ADDRESS")
 
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_error "Missing required environment variables:"
@@ -66,6 +65,7 @@ ARTIFACTS_DIR="$CONTRACTS_DIR/artifacts"
 
 # Default values
 SLOT_NUMBER="${SLOT_NUMBER:-12345}"
+SKIP_DEPLOY="${SKIP_DEPLOY:-false}"
 
 # Validate environment
 validate_env
@@ -73,16 +73,79 @@ validate_env
 # Create artifacts directory
 mkdir -p "$ARTIFACTS_DIR"
 
+# Set output paths
+L1_OUT_PATH="${L1_DEPLOY_FILE:-$ARTIFACTS_DIR/l1-deploy.json}"
+L2_OUT_PATH="${L2_DEPLOY_FILE:-$ARTIFACTS_DIR/l2-deploy.json}"
 PROOF_FILE="$ARTIFACTS_DIR/middlewareDataProof.json"
 
 cd "$CONTRACTS_DIR"
 
 #######################################################################
-# Step 1: Update L1 Shim (Snapshot operator state)
+# Step 1: Deploy L1 Contracts (MiddlewareShim)
 #######################################################################
 
-log_info "Step 1: Updating L1 MiddlewareShim (snapshotting operator state)..."
+if [[ "$SKIP_DEPLOY" != "true" ]]; then
+    log_info "Step 1: Deploying L1 contracts to $(echo $L1_RPC_URL | sed 's/\/.*//g')..."
+
+    export REGISTRY_COORDINATOR_ADDRESS
+    export PRIVATE_KEY
+    export L1_OUT_PATH
+
+    forge script script/e2e/DeployL1.s.sol:DeployL1 \
+        --broadcast \
+        --rpc-url "$L1_RPC_URL" \
+        --quiet
+
+    log_info "L1 contracts deployed. Output: $L1_OUT_PATH"
+else
+    log_info "Step 1: Skipping L1 deployment (SKIP_DEPLOY=true)"
+    if [[ ! -f "$L1_OUT_PATH" ]]; then
+        log_error "L1 deployment file not found: $L1_OUT_PATH"
+        exit 1
+    fi
+fi
+
+# Read L1 deployment addresses
+MIDDLEWARE_SHIM_ADDRESS=$(jq -r '.middlewareShim' "$L1_OUT_PATH")
 log_info "MiddlewareShim: $MIDDLEWARE_SHIM_ADDRESS"
+
+#######################################################################
+# Step 2: Deploy L2 Contracts (RegistryCoordinatorMimic)
+#######################################################################
+
+if [[ "$SKIP_DEPLOY" != "true" ]]; then
+    log_info "Step 2: Deploying L2 contracts..."
+
+    export MIDDLEWARE_SHIM_ADDRESS
+    export SP1HELIOS_ADDRESS="0x0000000000000000000000000000000000000000"
+    export IS_SP1HELIOS_MOCK="true"
+    export L2_OUT_PATH
+
+    forge script script/e2e/DeployL2.s.sol:DeployL2 \
+        --broadcast \
+        --rpc-url "$L2_RPC_URL" \
+        --quiet
+
+    log_info "L2 contracts deployed. Output: $L2_OUT_PATH"
+else
+    log_info "Step 2: Skipping L2 deployment (SKIP_DEPLOY=true)"
+    if [[ ! -f "$L2_OUT_PATH" ]]; then
+        log_error "L2 deployment file not found: $L2_OUT_PATH"
+        exit 1
+    fi
+fi
+
+# Read L2 deployment addresses
+REGISTRY_COORDINATOR_MIMIC=$(jq -r '.registryCoordinatorMimic' "$L2_OUT_PATH")
+BLS_SIGNATURE_CHECKER=$(jq -r '.blsSignatureChecker' "$L2_OUT_PATH")
+log_info "RegistryCoordinatorMimic: $REGISTRY_COORDINATOR_MIMIC"
+log_info "BLSSignatureChecker: $BLS_SIGNATURE_CHECKER"
+
+#######################################################################
+# Step 3: Update L1 Shim (Snapshot operator state)
+#######################################################################
+
+log_info "Step 3: Updating L1 MiddlewareShim (snapshotting operator state)..."
 
 TX_RESULT=$(cast send \
     --rpc-url "$L1_RPC_URL" \
@@ -101,13 +164,13 @@ BLOCK_NUMBER=$(cast receipt --rpc-url "$L1_RPC_URL" "$TX_HASH" --json | jq -r '.
 log_info "Operator state snapshotted at block: $BLOCK_NUMBER"
 
 #######################################################################
-# Step 2: Generate Mock Proof
+# Step 4: Generate Mock Proof
 #######################################################################
 
-log_info "Step 2: Generating mock proof..."
+log_info "Step 4: Generating mock proof..."
 
 # Get SP1Helios address from mimic
-SP1HELIOS_ADDRESS=$(cast call "$REGISTRY_COORDINATOR_MIMIC_ADDRESS" "LITE_CLIENT()(address)" --rpc-url "$L2_RPC_URL")
+SP1HELIOS_ADDRESS=$(cast call "$REGISTRY_COORDINATOR_MIMIC" "LITE_CLIENT()(address)" --rpc-url "$L2_RPC_URL")
 log_info "SP1Helios address: $SP1HELIOS_ADDRESS"
 
 # Get middleware block number
@@ -156,16 +219,14 @@ jq -n \
 log_info "Mock proof saved to: $PROOF_FILE"
 
 #######################################################################
-# Step 3: Update L2 Mimic (Bridge state)
+# Step 5: Update L2 Mimic (Bridge state)
 #######################################################################
 
-log_info "Step 3: Bridging state to L2 mimic..."
-log_info "RegistryCoordinatorMimic: $REGISTRY_COORDINATOR_MIMIC_ADDRESS"
-log_info "BLSSignatureChecker: $BLS_SIGNATURE_CHECKER_ADDRESS"
+log_info "Step 5: Bridging state to L2 mimic..."
 
 export PROOF_FILE
-export REGISTRY_COORDINATOR_MIMIC_ADDRESS
-export BLS_SIGNATURE_CHECKER_ADDRESS
+export REGISTRY_COORDINATOR_MIMIC_ADDRESS="$REGISTRY_COORDINATOR_MIMIC"
+export BLS_SIGNATURE_CHECKER_ADDRESS="$BLS_SIGNATURE_CHECKER"
 export MIDDLEWARE_SHIM_ADDRESS
 export IS_SP1HELIOS_MOCK="true"
 export L1_RPC_URL
@@ -184,8 +245,8 @@ log_info "State bridged successfully!"
 
 log_info "Verifying bridged state on L2..."
 
-QUORUM_COUNT=$(cast call "$REGISTRY_COORDINATOR_MIMIC_ADDRESS" "quorumCount()(uint8)" --rpc-url "$L2_RPC_URL")
-LAST_BLOCK=$(cast call "$REGISTRY_COORDINATOR_MIMIC_ADDRESS" "lastBlockNumber()(uint32)" --rpc-url "$L2_RPC_URL")
+QUORUM_COUNT=$(cast call "$REGISTRY_COORDINATOR_MIMIC" "quorumCount()(uint8)" --rpc-url "$L2_RPC_URL")
+LAST_BLOCK=$(cast call "$REGISTRY_COORDINATOR_MIMIC" "lastBlockNumber()(uint32)" --rpc-url "$L2_RPC_URL")
 
 log_info "Verification complete:"
 echo "  - Quorum count: $QUORUM_COUNT"
@@ -200,11 +261,16 @@ echo "========================================"
 echo "Bridge Complete!"
 echo "========================================"
 echo ""
-echo "L1 Contracts:"
+echo "L1 Contracts ($(echo $L1_RPC_URL | sed 's|https://||' | cut -d'.' -f1)):"
 echo "  MiddlewareShim: $MIDDLEWARE_SHIM_ADDRESS"
 echo ""
 echo "L2 Contracts:"
-echo "  RegistryCoordinatorMimic: $REGISTRY_COORDINATOR_MIMIC_ADDRESS"
-echo "  BLSSignatureChecker: $BLS_SIGNATURE_CHECKER_ADDRESS"
+echo "  RegistryCoordinatorMimic: $REGISTRY_COORDINATOR_MIMIC"
+echo "  BLSSignatureChecker: $BLS_SIGNATURE_CHECKER"
 echo "  SP1HeliosMock: $SP1HELIOS_ADDRESS"
+echo ""
+echo "Deployment files:"
+echo "  L1: $L1_OUT_PATH"
+echo "  L2: $L2_OUT_PATH"
+echo "  Proof: $PROOF_FILE"
 echo ""
