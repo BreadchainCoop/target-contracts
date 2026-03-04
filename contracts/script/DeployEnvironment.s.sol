@@ -9,16 +9,15 @@ import {ISlashingRegistryCoordinator} from "@eigenlayer-middleware/interfaces/IS
 import {SP1Helios} from "@sp1-helios/SP1Helios.sol";
 
 contract DeployEnvironment is Script {
-    address constant OPACITY_REGISTRY_COORDINATOR_ADDRESS_HOLESKY = 0x3e43AA225b5cB026C5E8a53f62572b10D526a50B;
-
     function setUp() public {}
 
     function run() public {
+        address registryCoordinator = vm.envAddress("REGISTRY_COORDINATOR");
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(deployerPrivateKey);
 
         MiddlewareShim middlewareShim =
-            new MiddlewareShim(ISlashingRegistryCoordinator(OPACITY_REGISTRY_COORDINATOR_ADDRESS_HOLESKY));
+            new MiddlewareShim(ISlashingRegistryCoordinator(registryCoordinator));
         console.log("MiddlewareShim deployed at:", address(middlewareShim));
 
         RegistryCoordinatorMimic registryCoordinatorMimic =
