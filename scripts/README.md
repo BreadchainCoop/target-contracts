@@ -5,7 +5,7 @@ Bridges EigenLayer operator state from L1 to L2.
 ## Image
 
 ```
-ghcr.io/ronturetzky/target-contracts/bridge:pr-1
+ghcr.io/BreadchainCoop/target-contracts/bridge
 ```
 
 ## Usage
@@ -16,7 +16,7 @@ docker run --rm --platform linux/amd64 \
   -e L1_RPC_URL="https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY" \
   -e L2_RPC_URL="https://gnosis-mainnet.g.alchemy.com/v2/YOUR_KEY" \
   -e REGISTRY_COORDINATOR_ADDRESS="0x..." \
-  ghcr.io/ronturetzky/target-contracts/bridge:pr-1
+  ghcr.io/BreadchainCoop/target-contracts/bridge
 ```
 
 ## Environment Variables
